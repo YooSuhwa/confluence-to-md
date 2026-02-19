@@ -89,6 +89,9 @@ def convert(
     if not html or not html.strip():
         return ""
 
+    # Strip CDATA markers before parsing — lxml silently drops CDATA content
+    html = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', html, flags=re.DOTALL)
+
     soup = BeautifulSoup(html, "lxml")
 
     # Phase 1: Pre-process Confluence-specific elements

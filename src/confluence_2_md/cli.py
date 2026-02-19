@@ -15,11 +15,11 @@ from confluence_2_md.url_parser import parse_confluence_url
 
 
 def _sanitize_filename(title: str) -> str:
-    """Convert a page title to a safe filename."""
+    """Convert a page title to a safe filename, preserving spaces."""
     # Replace characters illegal in filenames
-    name = re.sub(r'[<>:"/\\|?*]', "_", title)
-    # Collapse multiple underscores/spaces
-    name = re.sub(r"[_\s]+", "_", name).strip("_")
+    name = re.sub(r'[<>:"/\\|?*]', " ", title)
+    # Collapse multiple spaces
+    name = re.sub(r" {2,}", " ", name).strip()
     return name or "page"
 
 
