@@ -43,12 +43,47 @@ EMOTICON_MAP = {
 class _ConfluenceMarkdownConverter(MarkdownConverter):
     """Custom markdownify converter that handles special elements."""
 
+    def _in_table(self, parent_tags):
+        return "td" in parent_tags or "th" in parent_tags
+
     def convert_pre(self, el, text, parent_tags):
-        if not text:
+        # Get raw code from element, not pre-processed text
+        code_el = el.find("code")
+        raw = code_el.get_text() if code_el else el.get_text()
+        if not raw.strip():
             return ""
         lang = el.get("data-lang", "")
-        code = text.strip("\n")
+        code = raw.strip("\n")
+        if self._in_table(parent_tags):
+            # Inside table: fenced code blocks break table format
+            escaped = code.replace("|", "\\|")
+            if "\n" not in escaped:
+                return f" `{escaped}` "
+            # Multi-line: HTML code block
+            html_escaped = escaped.replace("\n", "<br>")
+            return f" <code>{html_escaped}</code> "
         return f"\n```{lang}\n{code}\n```\n"
+
+    def convert_code(self, el, text, parent_tags):
+        """Handle inline code. Escape pipes when in a table cell."""
+        if not text:
+            return ""
+        # Skip if parent is <pre> — handled by convert_pre
+        if "pre" in parent_tags:
+            return text
+        if self._in_table(parent_tags):
+            escaped = text.replace("|", "\\|")
+            return f"`{escaped}`"
+        return f"`{text}`"
+
+    def convert_td(self, el, text, parent_tags):
+        """Escape unprotected pipes in table cell text."""
+        # Pipes inside backticks are already escaped by convert_code/convert_pre
+        return f" {text.strip()} |"
+
+    def convert_th(self, el, text, parent_tags):
+        """Escape unprotected pipes in table header text."""
+        return f" {text.strip()} |"
 
     def convert_details(self, el, text, parent_tags):
         """Preserve <details> tags as raw HTML."""
