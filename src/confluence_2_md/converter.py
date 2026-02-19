@@ -64,6 +64,20 @@ class _ConfluenceMarkdownConverter(MarkdownConverter):
             return el.get_text()
         return super().convert_div(el, text, parent_tags) if hasattr(super(), 'convert_div') else f"\n{text}\n"
 
+    def convert_mark(self, el, text, parent_tags):
+        """Convert <mark> to ==text== (Obsidian) or <mark> HTML passthrough."""
+        if not text:
+            return ""
+        color = el.get("data-highlight-color", "")
+        if self.options.get("obsidian"):
+            if color and color != "yellow":
+                return f'<mark style="background: {color}">{text}</mark>'
+            return f"=={text}=="
+        # Standard mode: pass through as HTML
+        if color:
+            return f'<mark style="background: {color}">{text}</mark>'
+        return f"<mark>{text}</mark>"
+
 
 def _md(html: str, **kwargs) -> str:
     return _ConfluenceMarkdownConverter(**kwargs).convert(html)
@@ -106,10 +120,12 @@ def convert(
     _preprocess_emoticons(soup)
     _preprocess_images(soup, download_images, image_dir, obsidian=obsidian)
     _preprocess_noformat(soup)
+    _preprocess_highlights(soup)
 
     # Phase 2: Convert to Markdown via markdownify
     cleaned_html = str(soup)
-    md = _md(cleaned_html, heading_style="ATX", bullets="-", strip=["span"])
+    md = _md(cleaned_html, heading_style="ATX", bullets="-", strip=["span"],
+             obsidian=obsidian)
 
     # Phase 3: Post-process
     md = _postprocess(md)
@@ -174,6 +190,73 @@ def _preprocess_noformat(soup: BeautifulSoup) -> None:
         code.string = text
         pre.append(code)
         macro.replace_with(pre)
+
+
+_HIGHLIGHT_CLASS_COLORS = {
+    "highlight-yellow": "yellow",
+    "highlight-red": "#ffcccb",
+    "highlight-green": "#90ee90",
+    "highlight-blue": "#add8e6",
+    "highlight-grey": "#d3d3d3",
+    "highlight-teal": "#008080",
+    "highlight-purple": "#dda0dd",
+}
+
+
+def _preprocess_highlights(soup: BeautifulSoup) -> None:
+    """Convert highlight spans/marks to <mark> tags.
+
+    Handles:
+    - <span class="highlight-yellow">
+    - <span style="background-color: ...">
+    - <mark> (pass through)
+    - ac:structured-macro[highlight]
+    """
+    # 1. Highlight spans via class
+    for span in soup.find_all("span", class_=lambda c: c and any(
+        cls.startswith("highlight-") for cls in (c if isinstance(c, list) else [c])
+    )):
+        classes = span.get("class", [])
+        color = "yellow"
+        for cls in classes:
+            if cls in _HIGHLIGHT_CLASS_COLORS:
+                color = _HIGHLIGHT_CLASS_COLORS[cls]
+                break
+        mark = soup.new_tag("mark")
+        mark["data-highlight-color"] = color
+        mark.extend(list(span.children))
+        span.replace_with(mark)
+
+    # 2. Spans with background-color style
+    for span in soup.find_all("span", style=re.compile(r"background-color")):
+        style = span.get("style", "")
+        bg_match = re.search(r"background-color:\s*([^;]+)", style)
+        if bg_match:
+            color = bg_match.group(1).strip()
+            mark = soup.new_tag("mark")
+            mark["data-highlight-color"] = color
+            mark.extend(list(span.children))
+            span.replace_with(mark)
+
+    # 3. Highlight macro
+    for macro in soup.find_all("ac:structured-macro"):
+        name = _get_macro_name(macro)
+        if name != "highlight":
+            continue
+        color = _get_param(macro, "color") or "yellow"
+        body = macro.find("ac:rich-text-body")
+        inner = body.decode_contents() if body else ""
+        mark = soup.new_tag("mark")
+        mark["data-highlight-color"] = color
+        inner_soup = BeautifulSoup(inner, "html.parser")
+        for child in list(inner_soup.children):
+            mark.append(child)
+        macro.replace_with(mark)
+
+    # 4. Existing <mark> tags without color → default yellow
+    for mark in soup.find_all("mark"):
+        if not mark.get("data-highlight-color"):
+            mark["data-highlight-color"] = "yellow"
 
 
 def _preprocess_info_panels(soup: BeautifulSoup, *, obsidian: bool = False) -> None:
