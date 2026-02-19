@@ -2,7 +2,7 @@
 name: confluence-to-md
 description: Convert Confluence wiki pages to clean Markdown files using the confluence2md CLI. Use when the user provides a Confluence URL (atlassian.net/wiki) and wants to save it as a Markdown note, or when the user asks to import, convert, or fetch a Confluence page.
 compatibility: Requires Python 3.11+ and pip. Requires confluence2md CLI installed via pip.
-allowed-tools: Bash(confluence2md:*) Bash(pip:*) Bash(mv:*) Bash(mkdir:*) Bash(sed:*)
+allowed-tools: Bash(confluence2md:*) Bash(pip:*)
 ---
 
 # Confluence to Markdown
@@ -33,46 +33,52 @@ If the command fails with a configuration error, tell the user to create this fi
 - Short link: `https://domain.atlassian.net/wiki/x/AbCdEf`
 - Page ID: `123456`
 
-## Usage (Obsidian vault)
+## Usage
 
-When the user provides a Confluence URL, follow these steps:
-
-### Step 1: Convert and save
+When the user provides a Confluence URL, run:
 
 ```bash
-confluence2md "<url>" -o "00. Inbox/05. Confluence"
+confluence2md "<url>" --obsidian -o "00. Inbox/05. Confluence" --image-dir "90. Settings/99. Attachments"
 ```
 
-This saves the Markdown file to `00. Inbox/05. Confluence/` and images to a subfolder named after the page title.
+The `--obsidian` flag enables:
+- Wikilink image embeds: `![[filename.png]]` instead of `![alt](path)`
+- Obsidian callout syntax: `> [!info]` instead of plain blockquotes
 
-### Step 2: Move images to Attachments
+Images are saved flat (no subfolder per page) in the attachments directory.
 
-After conversion, move all downloaded images from the page-title subfolder to the vault's attachments folder:
+## Frontmatter
 
-```bash
-mkdir -p "90. Settings/99. Attachments"
-mv "00. Inbox/05. Confluence/<Page_Title>/"* "90. Settings/99. Attachments/"
-rmdir "00. Inbox/05. Confluence/<Page_Title>"
+After saving the Markdown file, prepend YAML frontmatter to the file. Generate the following properties:
+
+```yaml
+---
+type:
+  - source
+aliases:
+  - <generate 1-2 short Korean aliases summarizing the page title>
+CMDS:
+index:
+status: reference
+tags:
+  - <generate 2-5 relevant tags based on page content, in Korean or English as appropriate>
+date created: <today's date in YYYY-MM-DD format>
+related:
+source_url: <the original Confluence URL>
+---
 ```
 
-Replace `<Page_Title>` with the actual sanitized page title (the folder name created by confluence2md).
-
-### Step 3: Fix image paths in the Markdown file
-
-Update all image references in the saved Markdown file. Replace the page-title-prefixed paths with the attachments path:
-
-- Find: `<Page_Title>/filename.png`
-- Replace with: `90. Settings/99. Attachments/filename.png`
-
-Use sed or similar to do this in-place on the saved .md file. The relative path from `00. Inbox/05. Confluence/` to `90. Settings/99. Attachments/` is `../../90. Settings/99. Attachments/`.
-
-So the replacement should be:
-- From: `<Page_Title>/`
-- To: `../../90. Settings/99. Attachments/`
+Rules:
+- `aliases`: Generate concise aliases based on the page title. Abbreviate or simplify the title.
+- `CMDS`, `index`, `related`: Leave empty (no value after the colon).
+- `status`: Always set to `reference`.
+- `tags`: Generate relevant tags by reading the converted Markdown content. Use lowercase.
+- `date created`: Use today's date.
+- `source_url`: Use the exact URL the user provided.
 
 ## Behavior
 
-1. Always follow the 3-step process above (convert → move images → fix paths)
-2. After saving, confirm the filename and briefly describe the page content
-3. If the user asks to summarize or analyze the page, first save it then read the saved file
-4. If no images were downloaded (empty subfolder or no subfolder created), skip steps 2 and 3
+1. Always use the command with `--obsidian`, `-o "00. Inbox/05. Confluence"`, and `--image-dir "90. Settings/99. Attachments"`
+2. After saving, read the file to generate appropriate aliases and tags, then prepend the frontmatter
+3. Confirm the filename and briefly describe the page content
+4. If the user asks to summarize or analyze the page, first save it then read the saved file

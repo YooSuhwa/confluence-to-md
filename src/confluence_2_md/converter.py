@@ -58,18 +58,30 @@ class _ConfluenceMarkdownConverter(MarkdownConverter):
         """Handled by convert_details — should not be called standalone."""
         return text
 
+    def convert_div(self, el, text, parent_tags):
+        """Pass through raw markdown divs as-is."""
+        if el.get("data-raw-markdown"):
+            return el.get_text()
+        return super().convert_div(el, text, parent_tags) if hasattr(super(), 'convert_div') else f"\n{text}\n"
+
 
 def _md(html: str, **kwargs) -> str:
     return _ConfluenceMarkdownConverter(**kwargs).convert(html)
 
 
-def convert(html: str, download_images: bool = False, image_dir: str = "assets") -> str:
+def convert(
+    html: str,
+    download_images: bool = False,
+    image_dir: str = "assets",
+    obsidian: bool = False,
+) -> str:
     """Convert Confluence storage-format HTML to Markdown.
 
     Args:
         html: Confluence storage-format HTML string.
         download_images: If True, rewrite image refs to local image_dir/ paths.
         image_dir: Directory name for image references in Markdown.
+        obsidian: If True, use Obsidian-flavored syntax (wikilink images, callouts).
 
     Returns:
         Markdown string.
@@ -81,7 +93,7 @@ def convert(html: str, download_images: bool = False, image_dir: str = "assets")
 
     # Phase 1: Pre-process Confluence-specific elements
     _preprocess_code_blocks(soup)
-    _preprocess_info_panels(soup)
+    _preprocess_info_panels(soup, obsidian=obsidian)
     _preprocess_expand_macros(soup)
     _preprocess_task_lists(soup)
     _preprocess_user_mentions(soup)
@@ -89,7 +101,7 @@ def convert(html: str, download_images: bool = False, image_dir: str = "assets")
     _preprocess_status_macros(soup)
     _preprocess_toc_macros(soup)
     _preprocess_emoticons(soup)
-    _preprocess_images(soup, download_images, image_dir)
+    _preprocess_images(soup, download_images, image_dir, obsidian=obsidian)
     _preprocess_noformat(soup)
 
     # Phase 2: Convert to Markdown via markdownify
@@ -161,41 +173,61 @@ def _preprocess_noformat(soup: BeautifulSoup) -> None:
         macro.replace_with(pre)
 
 
-def _preprocess_info_panels(soup: BeautifulSoup) -> None:
-    """ac:structured-macro[info/note/warning/tip] → blockquote with label."""
+def _preprocess_info_panels(soup: BeautifulSoup, *, obsidian: bool = False) -> None:
+    """ac:structured-macro[info/note/warning/tip] → blockquote with label.
+
+    If obsidian=True, uses Obsidian callout syntax: > [!type] Title
+    """
     panel_types = {
-        "info": "Info",
-        "note": "Note",
-        "warning": "Warning",
-        "tip": "Tip",
-        "panel": "Note",
+        "info": "info",
+        "note": "note",
+        "warning": "warning",
+        "tip": "tip",
+        "panel": "note",
     }
     for macro in soup.find_all("ac:structured-macro"):
         name = _get_macro_name(macro)
         if name not in panel_types:
             continue
 
-        label = panel_types[name]
+        callout_type = panel_types[name]
         title = _get_param(macro, "title")
 
         body = macro.find("ac:rich-text-body")
         inner_html = body.decode_contents() if body else ""
 
-        header_text = label
-        if title:
-            header_text = f"{label}: {title}"
+        if obsidian:
+            # Convert inner HTML to markdown first for callout body
+            inner_md = _md(
+                str(BeautifulSoup(inner_html, "html.parser")),
+                heading_style="ATX", bullets="-", strip=["span"],
+            ).strip()
+            callout_header = f"[!{callout_type}] {title}" if title else f"[!{callout_type}]"
+            # Build callout as lines prefixed with >
+            lines = [f"> {callout_header}"]
+            for line in inner_md.split("\n"):
+                lines.append(f"> {line}" if line.strip() else ">")
+            callout_text = "\n".join(lines)
+            # Wrap in a div to pass through markdownify as-is
+            div = soup.new_tag("div")
+            div.string = f"\n{callout_text}\n"
+            div["data-raw-markdown"] = "true"
+            macro.replace_with(div)
+        else:
+            header_text = callout_type.capitalize()
+            if title:
+                header_text = f"{header_text}: {title}"
 
-        bq = soup.new_tag("blockquote")
-        p = soup.new_tag("p")
-        strong = soup.new_tag("strong")
-        strong.string = header_text
-        p.append(strong)
-        bq.append(p)
-        # Parse inner content with html.parser to avoid extra <html><body>
-        inner_soup = BeautifulSoup(inner_html, "html.parser")
-        for child in list(inner_soup.children):
-            bq.append(child)
-        macro.replace_with(bq)
+            bq = soup.new_tag("blockquote")
+            p = soup.new_tag("p")
+            strong = soup.new_tag("strong")
+            strong.string = header_text
+            p.append(strong)
+            bq.append(p)
+            inner_soup = BeautifulSoup(inner_html, "html.parser")
+            for child in list(inner_soup.children):
+                bq.append(child)
+            macro.replace_with(bq)
 
 
 def _preprocess_expand_macros(soup: BeautifulSoup) -> None:
@@ -314,9 +346,16 @@ def _preprocess_emoticons(soup: BeautifulSoup) -> None:
         emoticon.replace_with(soup.new_string(emoji))
 
 
-def _preprocess_images(soup: BeautifulSoup, download: bool, image_dir: str = "assets") -> None:
-    """ac:image → <img> tag.
+def _preprocess_images(
+    soup: BeautifulSoup,
+    download: bool,
+    image_dir: str = "assets",
+    *,
+    obsidian: bool = False,
+) -> None:
+    """ac:image → <img> tag (or Obsidian wikilink embed).
 
+    If obsidian=True, outputs ![[filename]] syntax.
     If download=True, rewrites src to image_dir/filename.
     Otherwise keeps the Confluence download URL placeholder.
     """
@@ -330,6 +369,13 @@ def _preprocess_images(soup: BeautifulSoup, download: bool, image_dir: str = "as
             filename = attachment.get("ri:filename", "image")
             if not alt:
                 alt = filename
+            if obsidian:
+                # Obsidian wikilink embed: ![[filename]]
+                div = soup.new_tag("div")
+                div.string = f"![[{filename}]]"
+                div["data-raw-markdown"] = "true"
+                ac_image.replace_with(div)
+                continue
             if download:
                 src = f"{image_dir}/{filename}"
             else:

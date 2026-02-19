@@ -50,9 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
         "-o", "--output",
         nargs="?",
         const="output",
-        default=None,
+        default="output",
         help="Output directory or file path (default: output/). "
              "If a directory is given, filename is derived from page title.",
+    )
+    p.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print Markdown to stdout instead of saving to file",
     )
     p.add_argument(
         "--json",
@@ -64,6 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-images",
         action="store_true",
         help="Skip downloading images",
+    )
+    p.add_argument(
+        "--obsidian",
+        action="store_true",
+        help="Use Obsidian-flavored syntax (wikilink images, callouts)",
+    )
+    p.add_argument(
+        "--image-dir",
+        default=None,
+        help="Directory to save downloaded images (used with --obsidian)",
     )
     p.add_argument(
         "--base-url",
@@ -131,18 +146,26 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     # Determine image download behavior
-    download_images = not args.no_images and not args.json_mode
+    download_images = not args.no_images and not args.json_mode and not args.stdout
+
+    # --stdout overrides file output
+    save_to_file = not args.stdout and not args.json_mode
 
     # Resolve output path (needed before convert to determine image_dir name)
     out_path = None
-    if args.output and not args.json_mode:
+    if save_to_file and args.output:
         out_path = _resolve_output_path(args.output, page.title)
 
     # Image directory = same name as the .md file (without extension)
     image_dir_name = _sanitize_filename(page.title) if out_path else "assets"
 
     # Convert HTML → Markdown
-    markdown = convert(page.html_content, download_images=download_images, image_dir=image_dir_name)
+    markdown = convert(
+        page.html_content,
+        download_images=download_images,
+        image_dir=image_dir_name,
+        obsidian=args.obsidian,
+    )
 
     # Download images if needed
     if download_images and page.attachments:
@@ -153,7 +176,9 @@ def main(argv: list[str] | None = None) -> None:
         ]
 
         if image_attachments:
-            if out_path:
+            if args.obsidian and args.image_dir:
+                assets_dir = Path(args.image_dir)
+            elif out_path:
                 assets_dir = out_path.parent / image_dir_name
             else:
                 assets_dir = Path.cwd() / "assets"
